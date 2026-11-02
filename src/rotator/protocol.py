@@ -67,8 +67,8 @@ class Deps:
     settings: Settings
     clock: Clock
     crash: CrashInjector = field(default_factory=CrashInjector)
-    # Lets a new run take over a lock whose owner is known to be dead. Default: never assume that.
-    is_run_alive: Callable[[str], bool] = lambda run_id: True
+    # (holder run id, lock age in seconds) -> may another run take the lock over? Default: never.
+    is_lock_stale: Callable[[str, float], bool] = lambda holder, age: False
 
     def audit(self, run_id: str) -> AuditLog:
         return AuditLog(self.settings.data_dir / "runs" / run_id)
@@ -77,6 +77,9 @@ class Deps:
     def session(self, target: Target, audit: AuditLog) -> Iterator[BrowserSession]:
         def secrets() -> dict[str, str]:
             record = self.vault.get_device(target.serial)
+            if record.state != "pending" or record.pending_run_id != target.run_id:
+                # Someone else changed the record mid-attempt: typing their values would be unsafe.
+                raise AttemptAborted("the escrowed password no longer belongs to this run")
             return {NEW: record.pending, CURRENT: record.active}
 
         settings = self.settings
@@ -85,6 +88,7 @@ class Deps:
             session = BrowserSession(
                 page, settings.dashboard_url, target.serial, secrets, self.vault.admin_credential,
                 Budget(settings.max_tool_calls, settings.max_tokens, settings.max_seconds), audit, worker=self.worker,
+                known_serials=self.vault.list_devices(),
             )
             session.login()
             yield session
@@ -94,6 +98,29 @@ class Deps:
 
 def build_graph(deps: Deps, checkpointer):
     vault, probe, crash = deps.vault, deps.probe, deps.crash
+
+    def scrub(text: str, serial: str) -> str:
+        """Error text from libraries can quote input values; strip anything that is a stored secret."""
+        try:
+            record = vault.get_device(serial)
+        except VaultError:
+            return f"[error text withheld: vault unavailable to scrub it] {text.split(':', 1)[0]}"
+        for secret in (record.active, record.pending, record.previous, record.abandoned):
+            if secret:
+                text = text.replace(secret, "[secret]")
+        return text
+
+    def adopt_fallback(state: RunState, record) -> Command | None:
+        """Neither active nor pending works: try older stored passwords before calling it an incident."""
+        for name in ("abandoned", "previous"):
+            candidate = getattr(record, name)
+            if candidate and probe.check(record.serial, candidate):
+                if record.pending and record.pending != candidate:
+                    record.abandoned = record.pending
+                record.active, record.pending, record.pending_run_id, record.state = candidate, "", "", "active"
+                vault.put_device(record)
+                return escalate_to(state, f"device accepted the {name} password; adopted it as active, please investigate")
+        return None
 
     def log(state: RunState, step: str, **fields) -> None:
         deps.audit(state["run_id"]).event(step, serial=state["serial"], **fields)
@@ -108,9 +135,9 @@ def build_graph(deps: Deps, checkpointer):
     def lock(state: RunState) -> Command:
         serial, run_id = state["serial"], state["run_id"]
         if not vault.acquire_lock(serial, run_id):
-            holder = vault.lock_holder(serial)
-            if holder and not deps.is_run_alive(holder):
-                log(state, "lock_takeover", previous_holder=holder)
+            holder, age = vault.lock_holder(serial), vault.lock_age(serial)
+            if holder and age is not None and deps.is_lock_stale(holder, age):
+                log(state, "lock_takeover", previous_holder=holder, lock_age_seconds=round(age))
                 vault.release_lock(serial, holder)
             if not vault.acquire_lock(serial, run_id):
                 log(state, "skipped_locked", holder=vault.lock_holder(serial))
@@ -132,7 +159,11 @@ def build_graph(deps: Deps, checkpointer):
             return escalate_to(state, "device_unreachable")
         log(state, "precheck", active_works=ok)
         if not ok:
-            return escalate_to(state, "precheck_failed: the stored active password does not work")
+            try:
+                fallback = adopt_fallback(state, record)
+            except (DeviceUnreachable, VaultError) as error:
+                return escalate_to(state, f"precheck_failed and fallback check failed: {type(error).__name__}")
+            return fallback or escalate_to(state, "precheck_failed: the stored active password does not work")
         crash.point("after_precheck")
         return Command(goto="escrow")
 
@@ -179,7 +210,7 @@ def build_graph(deps: Deps, checkpointer):
         except AttemptAborted as aborted:
             error = aborted.reason
         except Exception as failure:  # noqa: BLE001 - any agent failure goes to verify, which decides
-            error = f"{type(failure).__name__}: {str(failure)[:200]}"
+            error = scrub(f"{type(failure).__name__}: {failure}", record.serial)[:300]
         metrics = {}
         if session:
             budget = session.budget
@@ -209,7 +240,12 @@ def build_graph(deps: Deps, checkpointer):
                 return Command(goto="change")
             detail = state.get("change_error") or "the dashboard did not apply the change"
             return escalate_to(state, f"change_not_applied after {state.get('change_attempts', 0)} attempts: {detail}")
-        return escalate_to(state, "incident: no stored password works on the device")
+        try:
+            return adopt_fallback(state, record) or escalate_to(state, "incident: no stored password works on the device")
+        except DeviceUnreachable:
+            return escalate_to(state, "device_unreachable")
+        except VaultError as error:
+            return escalate_to(state, f"vault_unavailable at verify: {error}")
 
     def commit(state: RunState) -> Command:
         record = vault.get_device(state["serial"])
@@ -234,15 +270,17 @@ def build_graph(deps: Deps, checkpointer):
                 log(state, "recover", found="pending")
                 return Command(goto="commit")
             if probe.check(record.serial, record.active):
+                record.abandoned = record.pending or record.abandoned
                 record.pending, record.pending_run_id, record.state = "", "", "active"
                 vault.put_device(record)
                 log(state, "recover", found="active")
                 return Command(goto="precheck")
+            fallback = adopt_fallback(state, record)
         except DeviceUnreachable:
             return escalate_to(state, "device_unreachable")
         except VaultError as error:
             return escalate_to(state, f"vault_unavailable at recover: {error}")
-        return escalate_to(state, "incident: no stored password works on the device")
+        return fallback or escalate_to(state, "incident: no stored password works on the device")
 
     def escalate(state: RunState) -> Command:
         decision = interrupt({"kind": "escalation", "serial": state["serial"], "reason": state.get("reason", ""),

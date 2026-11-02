@@ -76,7 +76,7 @@ def test_crash_then_new_run_with_checkpoint_lost(dashboard, make_deps, tmp_path,
         start_run(graph_for(deps, tmp_path / "lost.db"), "CT200-0012", run_id="dead")
     assert_invariant(dashboard, "CT200-0012")
 
-    deps = make_deps(is_run_alive=lambda run_id: run_id != "dead")
+    deps = make_deps(is_lock_stale=lambda holder, age: holder == "dead")
     result = start_run(graph_for(deps, tmp_path / "new.db"), "CT200-0012", run_id="fresh")
     assert result["outcome"] == "succeeded"
     record = dashboard.vault.get_device("CT200-0012")
@@ -181,3 +181,31 @@ def test_no_password_leaks_into_checkpoints_or_audit(dashboard, make_deps, check
     files = [checkpoint_path, *(tmp_path / "data").rglob("*")]
     blob = b"".join(f.read_bytes() for f in files if f.is_file())
     assert blob and not [s for s in secrets if s.encode() in blob]
+
+
+def test_late_landing_password_is_adopted_not_lost(dashboard, make_deps, checkpoint_path):
+    # Recovery set a pending aside as "abandoned", then the slow change landed on the device after all.
+    record = dashboard.vault.get_device("CT200-0012")
+    record.abandoned = "LateLand1ng!Pass"
+    dashboard.vault.put_device(record)
+    from dashboard.db import connect
+    with connect(dashboard.db_path) as conn:
+        conn.execute("UPDATE devices SET password = 'LateLand1ng!Pass' WHERE serial = 'CT200-0012'")
+    result = start_run(graph_for(make_deps(), checkpoint_path), "CT200-0012")
+    assert result["status"] == "escalated" and "abandoned password" in result["reason"]
+    assert dashboard.vault.get_device("CT200-0012").active == dashboard.truth("CT200-0012")
+
+
+def test_recover_keeps_unused_pending_as_abandoned(dashboard, make_deps, checkpoint_path):
+    record = dashboard.vault.get_device("CT200-0012")
+    record.pending, record.pending_run_id, record.state = "NeverApplied12!a", "ghost", "pending"
+    dashboard.vault.put_device(record)
+    start_run(graph_for(make_deps(), checkpoint_path), "CT200-0012")
+    record = dashboard.vault.get_device("CT200-0012")
+    assert record.abandoned == "NeverApplied12!a" and dashboard.truth("CT200-0012") == record.active
+
+
+def test_young_lock_from_unknown_run_is_not_taken_over(dashboard, make_deps, checkpoint_path):
+    dashboard.vault.acquire_lock("CT200-0012", "other-process")
+    deps = make_deps(is_lock_stale=lambda holder, age: age > 3600)
+    assert start_run(graph_for(deps, checkpoint_path), "CT200-0012")["outcome"] == "skipped_locked"

@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -67,7 +68,8 @@ def test_sweep_recovers_stale_pending(dashboard, service):
     record = dashboard.vault.get_device("CT200-0003")
     record.pending, record.pending_run_id, record.state = "NeverUsed123456!", "ghost", "pending"
     dashboard.vault.put_device(record)
-    dashboard.vault.acquire_lock("CT200-0003", "ghost")
+    # A lock from a run this service never knew, two hours old: long past any real run.
+    dashboard.vault.locks["CT200-0003"] = ("ghost", time.time() - 7200)
     client, app = service()
     started = client.post("/sweep").json()["started"]
     assert {"serial": "CT200-0003", "reason": "recover_pending"} in [{k: s[k] for k in ("serial", "reason")} for s in started]

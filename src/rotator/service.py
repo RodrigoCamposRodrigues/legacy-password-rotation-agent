@@ -45,14 +45,16 @@ class RunStore:
                     status TEXT, outcome TEXT, reason TEXT, created_at TEXT, updated_at TEXT);
             """)
 
-    def record_event(self, event: RotationDue, run_id: str, now: str) -> str | None:
-        """Returns the existing run id if this event was already received."""
+    def record_webhook(self, event: RotationDue, run_id: str, now: str) -> str | None:
+        """Stores the event and its queued run in one transaction. Returns the existing run id for a repeat."""
         with self.lock, self.conn:
             row = self.conn.execute("SELECT run_id FROM events WHERE event_id = ?", (event.event_id,)).fetchone()
             if row:
                 return row["run_id"]
             self.conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?)",
                               (event.event_id, event.device_serial, event.due_at, run_id, now))
+            self.conn.execute("INSERT INTO runs VALUES (?, ?, ?, 'webhook', 'queued', '', '', ?, ?)",
+                              (run_id, event.device_serial, event.event_id, now, now))
         return None
 
     def add_run(self, run_id: str, serial: str, event_id: str, trigger: str, now: str) -> None:
@@ -104,7 +106,8 @@ class Worker:
                     view = start_run(self.graph, args["serial"], args.get("event_id", ""), run_id=run_id)
                 else:
                     view = resume_run(self.graph, run_id, args.get("decision"))
-                self.store.update(run_id, self.clock.now().isoformat(), status=view.get("status", ""),
+                status = "escalated" if view.get("waiting_for") else view.get("status", "")
+                self.store.update(run_id, self.clock.now().isoformat(), status=status,
                                   outcome=view.get("outcome", ""), reason=view.get("reason", ""))
             except Exception as error:  # noqa: BLE001 - the checkpoint lets a human or restart resume it
                 self.store.update(run_id, self.clock.now().isoformat(), status="crashed",
@@ -115,7 +118,16 @@ class Worker:
 
 def create_service(deps: Deps, store_path: Path, checkpointer, test_routes: bool = True) -> FastAPI:
     store = RunStore(store_path)
-    deps.is_run_alive = lambda run_id: (row := store.get(run_id)) is not None and row["status"] in LIVE
+
+    def is_lock_stale(holder: str, age: float) -> bool:
+        # A run we know about is stale only once finished. One we don't know (another process, a lost
+        # service.db) gets the benefit of the doubt until the lock is far older than any run can take.
+        row = store.get(holder)
+        if row is not None:
+            return row["status"] not in LIVE
+        return age > deps.settings.lock_ttl_seconds
+
+    deps.is_lock_stale = is_lock_stale
     graph = build_graph(deps, checkpointer)
     worker = Worker(graph, store, deps.clock)
     app = FastAPI(title="Rotation service")
@@ -137,8 +149,8 @@ def create_service(deps: Deps, store_path: Path, checkpointer, test_routes: bool
         for serial in deps.vault.list_devices():
             if serial in busy:
                 continue
-            holder = deps.vault.lock_holder(serial)
-            if holder and deps.is_run_alive(holder):
+            holder, age = deps.vault.lock_holder(serial), deps.vault.lock_age(serial)
+            if holder and not is_lock_stale(holder, age or 0):
                 continue
             record = deps.vault.get_device(serial)
             due = datetime.fromisoformat(record.active_since) + timedelta(days=deps.settings.rotation_days)
@@ -154,8 +166,12 @@ def create_service(deps: Deps, store_path: Path, checkpointer, test_routes: bool
     app.state.sweep = sweep
 
     for row in store.with_status("running", "queued"):
-        # Left over from a process that died: continue from the last checkpoint, or start if it never ran.
-        if graph.get_state({"configurable": {"thread_id": row["run_id"]}}).values:
+        # Left over from a process that died. A run paused for a human waits for a new decision, since
+        # the one that was queued is gone; otherwise continue from the checkpoint, or start if it never ran.
+        snapshot = graph.get_state({"configurable": {"thread_id": row["run_id"]}})
+        if snapshot.interrupts:
+            store.update(row["run_id"], now(), status="escalated")
+        elif snapshot.values:
             worker.submit("resume", row["run_id"])
         else:
             worker.submit("start", row["run_id"], serial=row["serial"], event_id=row["event_id"])
@@ -167,10 +183,10 @@ def create_service(deps: Deps, store_path: Path, checkpointer, test_routes: bool
         except KeyError:
             raise HTTPException(404, "unknown device") from None
         run_id = uuid.uuid4().hex[:12]
-        existing = store.record_event(event, run_id, now())
+        existing = store.record_webhook(event, run_id, now())
         if existing:
             return {"status": "duplicate", "run_id": existing}
-        queue_run(event.device_serial, "webhook", event.event_id, run_id=run_id)
+        worker.submit("start", run_id, serial=event.device_serial, event_id=event.event_id)
         return {"status": "accepted", "run_id": run_id}
 
     @app.post("/sweep")
@@ -218,15 +234,19 @@ def create_service(deps: Deps, store_path: Path, checkpointer, test_routes: bool
         row = store.get(run_id)
         if not row:
             raise HTTPException(404)
+        if row["status"] in ("queued", "running"):
+            raise HTTPException(409, "this run is already being processed")
         view = run_view(graph, run_id)
         options = (view.get("waiting_for") or {}).get("options", [])
         if row["status"] == "crashed" and not decision:
-            worker.submit("resume", run_id)
+            job = {}
         elif decision in options:
-            worker.submit("resume", run_id, decision=decision)
+            job = {"decision": decision}
         else:
             raise HTTPException(400, "this run is not waiting for that decision")
+        # Mark queued before the worker can pick it up, so a fast run's final status isn't overwritten.
         store.update(run_id, now(), status="queued")
+        worker.submit("resume", run_id, **job)
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
     if test_routes:

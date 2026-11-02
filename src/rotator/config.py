@@ -35,6 +35,8 @@ class Settings:
     max_seconds: float = 180
     verify_retries: int = 2
     rotation_days: int = 180
+    # A lock whose run this service doesn't know is only taken over after this long (longest run is ~10 min).
+    lock_ttl_seconds: float = 3600
 
     @classmethod
     def from_env(cls) -> "Settings":

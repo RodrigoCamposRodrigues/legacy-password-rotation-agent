@@ -135,3 +135,36 @@ def test_second_gate_rejection_aborts(dashboard, make_session):
     session.request_submit(el(session, "Save"))
     with pytest.raises(AttemptAborted, match="rejected 2 times"):
         session.request_submit(el(session, "Save"))
+
+
+def test_failed_fill_never_echoes_the_secret(dashboard, make_session):
+    session = make_session("CT200-0012")
+    open_device(session, dashboard, "CT200-0012")
+    field = el(session, "New password")
+    session.page.evaluate("document.getElementById('new_password').disabled = true")
+    session.page.set_default_timeout(500)
+    result = session.fill(field, NEW)
+    assert result.startswith("Fill failed") and session.new_password not in result
+    assert session.new_password not in (session.audit.path.read_text())
+
+
+def test_gate_rejects_page_showing_another_serial(dashboard, make_session):
+    from dashboard.db import connect
+    with connect(dashboard.db_path) as conn:
+        conn.execute("UPDATE devices SET notes = 'Same rack as CT200-0112' WHERE serial = 'CT200-0012'")
+    session = make_session("CT200-0012")
+    open_device(session, dashboard, "CT200-0012")
+    fill_ct200(session)
+    assert "other device serials (CT200-0112)" in session.request_submit(el(session, "Save"))
+
+
+def test_dialog_is_not_accepted_after_an_ungated_moment(dashboard, make_session):
+    session = make_session("FL9-0012")
+    session.page.goto(f"{dashboard.url}/devices")
+    session.snapshot()
+    session.request_submit(el(session, "Search"))
+    open_device(session, dashboard, "FL9-0012", "?tab=security")
+    session.fill(el(session, "Service PIN"), NEW)
+    session.fill(el(session, "Repeat PIN"), NEW)
+    session.page.locator("button[type=submit]").click()
+    assert dashboard.truth("FL9-0012") == dashboard.passwords["FL9-0012"]

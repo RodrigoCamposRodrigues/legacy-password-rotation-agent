@@ -12,7 +12,7 @@ import threading
 import time
 from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlparse
 
 from playwright.sync_api import Error as PlaywrightError
@@ -55,7 +55,7 @@ SNAPSHOT_JS = """
       id: n, tag, type, label, name: el.getAttribute('name') || '',
       href: el.getAttribute('href') || '',
       form_index: form ? Array.from(document.forms).indexOf(form) : -1,
-      form_method: form ? (form.getAttribute('method') || 'get').toLowerCase() : '',
+      form_method: form ? (el.getAttribute('formmethod') || form.getAttribute('method') || 'get').toLowerCase() : '',
       filled: (tag === 'input' || tag === 'textarea') ? el.value.length > 0 : false,
       value: ((tag === 'input' && type !== 'password') || tag === 'select' || tag === 'textarea') ? el.value : '',
       options: tag === 'select' ? Array.from(el.options).map(o => o.text) : [],
@@ -175,8 +175,8 @@ class Element:
             text += f' value="{self.value}"'
         elif self.tag == "select":
             text += f" options={self.options} selected=\"{self.value}\""
-        if self.is_submit and self.form_method == "post":
-            text += " (submits a POST form: use request_submit)"
+        if self.is_submit:
+            text += " (submit button: use request_submit)"
         return text
 
 
@@ -223,8 +223,10 @@ class Budget:
 class BrowserSession:
     def __init__(self, page: Page, dashboard_url: str, target_serial: str,
                  secrets: Callable[[], dict[str, str]], admin_credential: Callable[[], tuple[str, str]],
-                 budget: Budget, audit: AuditLog, max_gate_rejections: int = 2, worker: BrowserWorker | None = None):
+                 budget: Budget, audit: AuditLog, max_gate_rejections: int = 2, worker: BrowserWorker | None = None,
+                 known_serials: Iterable[str] = ()):
         self.worker = worker
+        self.other_serials = set(known_serials) - {target_serial}
         self.page = page
         self.dashboard_url = dashboard_url.rstrip("/")
         self.host = urlparse(self.dashboard_url).netloc
@@ -259,10 +261,14 @@ class BrowserSession:
 
     def _submit_login(self) -> None:
         username, password = self._admin_credential()
-        self.page.fill("#username", username)
-        self.page.fill("#password", password)
-        self.page.click("input[type=submit]")
-        self.page.wait_for_load_state()
+        try:
+            self.page.fill("#username", username)
+            self.page.fill("#password", password)
+            self.page.click("input[type=submit]")
+            self.page.wait_for_load_state()
+        except PlaywrightError as error:
+            # Playwright's message quotes the typed value, so never let it travel.
+            raise RuntimeError(f"dashboard login failed ({type(error).__name__})") from None
 
     def _element(self, element_id: int) -> Element:
         if element_id not in self._elements:
@@ -279,8 +285,24 @@ class BrowserSession:
     def _on_dashboard(self) -> bool:
         return urlparse(self.page.url).netloc == self.host
 
-    def _serial_on_page(self) -> bool:
-        return re.search(rf"\b{re.escape(self.target_serial)}\b", self.page.inner_text("body")) is not None
+    def _wrong_device(self) -> str:
+        """Empty if the page is about the target device only, otherwise why not."""
+        text = self.page.inner_text("body")
+        if not re.search(rf"\b{re.escape(self.target_serial)}\b", text):
+            return f"target serial {self.target_serial} is not on this page; wrong device?"
+        others = [s for s in self.other_serials if re.search(rf"\b{re.escape(s)}\b", text)]
+        if others:
+            return f"page also shows other device serials ({', '.join(sorted(others))}); can't tell which device the form changes"
+        return ""
+
+    def _fill_value(self, element_id: int, value: str, label: str) -> str | None:
+        """Fills a field; on failure returns a message that never includes the value."""
+        try:
+            self._locator(element_id).fill(value)
+        except PlaywrightError as error:
+            self.audit.event("fill_error", label=label, error=type(error).__name__)
+            return f"Fill failed in the browser ({type(error).__name__}). Call read_page."
+        return None
 
     def _contains_secret(self, value: str) -> bool:
         return any(p in value for p in PLACEHOLDERS) or any(s and s in value for s in self._secrets().values())
@@ -316,8 +338,8 @@ class BrowserSession:
     def click(self, element_id: int) -> str:
         self.budget.spend()
         element = self._element(element_id)
-        if element.is_submit and element.form_method == "post":
-            return "Refused: this button submits a POST form. Use request_submit instead."
+        if element.is_submit:
+            return "Refused: this is a submit button. Use request_submit instead."
         if element.tag == "a" and element.href.startswith(("http://", "https://")) and urlparse(element.href).netloc != self.host:
             return "Refused: the link leaves the dashboard."
         self._locator(element_id).click()
@@ -338,13 +360,15 @@ class BrowserSession:
             if value not in PLACEHOLDERS:
                 self.audit.event("fill_refused", label=element.label, reason="raw value in secret field")
                 return f"Refused: secret fields accept only {NEW} or {CURRENT}, never a typed value."
-            self._locator(element_id).fill(self._secrets()[value])
+            if failed := self._fill_value(element_id, self._secrets()[value], element.label):
+                return failed
             self.audit.event("fill", label=element.label, placeholder=value)
             return f'Filled "{element.label}" with {value}.'
         if self._contains_secret(value):
             self.audit.event("fill_refused", label=element.label, reason="secret in non-secret field")
             return "Refused: placeholders and secrets may only go into password or PIN fields."
-        self._locator(element_id).fill(value)
+        if failed := self._fill_value(element_id, value, element.label):
+            return failed
         self.audit.event("fill", label=element.label, value=value)
         return f'Filled "{element.label}".'
 
@@ -361,7 +385,7 @@ class BrowserSession:
     @_on_browser_thread
     def login_again(self) -> str:
         self.budget.spend()
-        if "/login" not in self.page.url:
+        if urlparse(self.page.url).path != "/login":
             next_path = urlparse(self.page.url).path
             self.page.goto(f"{self.dashboard_url}/login?next={next_path}")
         self._submit_login()
@@ -384,8 +408,8 @@ class BrowserSession:
                    if e.tag in ("input", "textarea") and not e.is_submit):
                 return self._reject("a GET form contains a secret")
             return self._do_submit(element, kind="get_form")
-        if not self._serial_on_page():
-            return self._reject(f"target serial {self.target_serial} is not on this page; wrong device?")
+        if problem := self._wrong_device():
+            return self._reject(problem)
         if secret_fields:
             problems = self._check_secret_form(secret_fields)
             if problems:
@@ -398,6 +422,8 @@ class BrowserSession:
 
     def _check_secret_form(self, secret_fields: list[Element]) -> list[str]:
         values = self._secrets()
+        if not values[NEW]:
+            return ["no pending password is escrowed for this run"]
         problems = []
         new_fields = [e for e in secret_fields if not e.is_current_secret]
         if not new_fields:
@@ -412,13 +438,19 @@ class BrowserSession:
 
     def _do_submit(self, element: Element, kind: str) -> str:
         # Playwright dismisses dialogs by default, so only a gated submit can ever accept a confirm().
-        self.page.once("dialog", lambda dialog: dialog.accept())
+        def accept(dialog):
+            dialog.accept()
+
+        self.page.on("dialog", accept)
         try:
             self._locator(element.id).click()
             self.page.wait_for_load_state()
         except PlaywrightError as error:
             self.audit.event("submit_error", kind=kind, error=type(error).__name__)
             return f"Submit failed in the browser ({type(error).__name__}). Call read_page."
+        finally:
+            # Only dialogs raised by this submit are accepted; later ones fall back to dismiss.
+            self.page.remove_listener("dialog", accept)
         self.submits += 1
         self.audit.event("submit", kind=kind, label=element.label, path=self._path())
         self.audit.screenshot(self.page, f"submit-{kind}")

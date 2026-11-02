@@ -59,6 +59,7 @@ def make_session(dashboard, page, worker, worker_page, tmp_path):
             worker_page if threaded else page, dashboard.url, serial, lambda: secrets, dashboard.vault.admin_credential,
             Budget(budget.get("max_tool_calls", 40), 60_000, budget.get("max_seconds", 60)),
             AuditLog(tmp_path / "audit"), worker=worker if threaded else None,
+            known_serials=dashboard.vault.list_devices(),
         )
         session.login()
         session.new_password = new

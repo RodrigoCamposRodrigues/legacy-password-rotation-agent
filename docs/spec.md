@@ -42,7 +42,7 @@ This is a reconstruction of a system design question from an AI engineering inte
 
 ### Vault layout (OpenBao KV v2, mount `secret/`)
 
-- `secret/devices/{serial}`: `active`, `pending`, `pending_run_id`, `previous`, `state` (`active` or `pending`), `active_since`, `model`.
+- `secret/devices/{serial}`: `active`, `pending`, `pending_run_id`, `previous`, `abandoned` (a pending that recovery set aside), `state` (`active` or `pending`), `active_since`, `model`.
 - `secret/locks/{serial}`: `run_id`, `acquired_at`. Created with check-and-set `cas=0`, so only one run can hold it.
 - Writes to device records use check-and-set on the current version, so two writers can't silently overwrite each other.
 - Password policies `ct200` and `fl9` generate passwords. The agent's token has a narrow policy; the root token is only used by the init script.
@@ -64,7 +64,9 @@ Steps, as LangGraph nodes. The graph state holds only IDs, status and reports, n
 7. **commit**: `pending` becomes `active`, old `active` becomes `previous`, `state = active`. Idempotent: if already committed for this run, skip.
 8. **unlock**: delete the lock. End as `succeeded`.
 
-**recover**: try `active`, then `pending` on the device. `pending` works: commit. `active` works: clear `pending`, continue to **precheck** (the rotation is still due). Neither works: incident, escalate.
+**recover**: try `pending`, then `active` on the device. `pending` works: commit. `active` works: move `pending` to `abandoned`, continue to **precheck** (the rotation is still due). Neither works: try `abandoned` and `previous`; if one works, adopt it as `active` and escalate for investigation. Nothing works: incident, escalate.
+
+**Lock takeover**: only when the holder run is known to be finished, or unknown and the lock is older than `lock_ttl_seconds` (1 hour).
 
 **escalate**: LangGraph `interrupt()` with the reason. A human resumes with `retry` (back to **inspect**), `resolved` (human fixed device and vault; unlock, end `resolved_by_human`) or `abort` (unlock, end `aborted`).
 

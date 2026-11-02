@@ -40,7 +40,9 @@ The protocol writes the new password down before using it, and keeps the old one
 
 **Invariant:** at every moment, at least one password stored in the vault works on the device.
 
-**Recovery.** Each run is checkpointed to SQLite after every step, and every step is safe to repeat. After a crash, the run resumes from its last checkpoint. If the checkpoint is lost too, the vault still says `pending`: the daily sweep finds it, tries `active` and `pending` on the device, and keeps whichever works.
+**Recovery.** Each run is checkpointed to SQLite after every step, and every step is safe to repeat. After a crash, the run resumes from its last checkpoint. If the checkpoint is lost too, the vault still says `pending`: the daily sweep finds it, tries `active` and `pending` on the device, and keeps whichever works. An unused `pending` is never deleted: it is kept as `abandoned`, and before calling anything an incident the protocol also tries `abandoned` and `previous`, so a change that lands late still can't strand the device.
+
+**Locks.** A lock is taken over only if its run is known to be finished, or if no one knows the run and the lock is older than any run can take (1 hour). A second process working on the same device is never assumed dead.
 
 **Escalation.** When code can't decide safely, the run pauses with LangGraph `interrupt()` and waits, across restarts if needed, for a human to choose *retry*, *resolved* or *abort* on the Runs page. An optional supervised mode asks for approval before every change.
 
@@ -51,14 +53,15 @@ The protocol writes the new password down before using it, and keeps the old one
 | Small tool set | `read_page`, `click`, `fill`, `select`, `request_submit`, `login_again`. No free navigation, no JavaScript. |
 | Text, not screenshots | The page is given as text with numbered elements. Password fields show only `(empty)` or `(filled)`. |
 | Placeholders only | Password and PIN fields accept only the two placeholders. Placeholders are refused anywhere else, such as the search box. |
-| Submit gate | Saving goes through `request_submit`. Code checks that the page shows the target serial number, and reads the real field values with Playwright to confirm every new-password field holds the new password. A confirmation page is allowed only after a password form passed. |
+| Submit gate | Every submit goes through `request_submit`. Code checks that the page shows the target serial number and no other device's serial, and reads the real field values with Playwright to confirm every new-password field holds the new password. A confirmation page is allowed only after a password form passed. |
 | Budgets | 40 tool calls, 60,000 tokens and 180 seconds per attempt. Two gate rejections end the attempt. |
 | Prompt injection | Page text is marked as untrusted data. The real defence is structural: even a fully hijacked agent can't type a chosen password or submit on the wrong device. |
+| No secrets in errors | Playwright error messages quote typed values, so failed fills return only the error type, and error text is scrubbed of stored passwords before it is logged or checkpointed. |
 | Structured report | The agent ends with a Pydantic report. It is logged for humans and ignored by the protocol. |
 
 ## Testing
 
-**Tests without an LLM (78 in total).** A scripted agent drives the same gated tools against the real fake dashboard. The run is killed at each of 9 points (after lock, before and after the escrow write, between the device changing and the checkpoint, after commit, ...). Each crash is tested twice: resuming the same run, and starting a new run with the checkpoint lost. Other tests cover a vault outage, an unreachable device (which must not look like a wrong password), silent save failures, duplicate and lost webhooks, wrong-device and injection attempts, human decisions, and a leak scan of checkpoints and logs.
+**Tests without an LLM (84 in total).** A scripted agent drives the same gated tools against the real fake dashboard. The run is killed at each of 9 points (after lock, before and after the escrow write, between the device changing and the checkpoint, after commit, ...). Each crash is tested twice: resuming the same run, and starting a new run with the checkpoint lost. Other tests cover a vault outage, an unreachable device (which must not look like a wrong password), silent save failures, duplicate and lost webhooks, wrong-device and injection attempts, human decisions, and a leak scan of checkpoints and logs.
 
 **Agent evals (real LLM).** Nine scenarios: look-alike device names, a PIN behind a tab and a `confirm()` dialog, paging, prompt injection, slow pages, session expiry, a failed save, a save that says "Saved!" but changes nothing, and a save that always fails (the right answer is to escalate). Each runs 5 times as a LangSmith experiment. Must be zero: lost passwords, wrong-device changes and secrets in traces. Also measured: success rate, gate rejections, tool calls, tokens and time.
 

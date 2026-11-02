@@ -20,7 +20,9 @@ class AuditLog:
     def screenshot(self, page, name: str) -> str:
         self._shots += 1
         filename = f"{self._shots:03d}-{name}.png"
-        page.screenshot(path=self.run_dir / filename, mask=[page.locator("input[type=password]")])
+        # Mask every typed-in field, not only type=password: a PIN may be a plain text input.
+        fields = page.locator("input:not([type=submit]):not([type=button]):not([type=hidden]), textarea")
+        page.screenshot(path=self.run_dir / filename, mask=[fields])
         self.event("screenshot", file=filename, url=page.url)
         return filename
 

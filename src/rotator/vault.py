@@ -2,6 +2,7 @@
 
 import secrets
 import string
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
@@ -62,6 +63,9 @@ class DeviceRecord:
     pending: str = ""
     pending_run_id: str = ""
     previous: str = ""
+    # A pending password that recovery set aside because the device didn't take it (yet). Kept in case a
+    # late change lands after all, so the device can never end up with a password the vault forgot.
+    abandoned: str = ""
     version: int = field(default=0, compare=False)
 
     def __repr__(self) -> str:
@@ -80,6 +84,7 @@ class Vault(Protocol):
     def list_devices(self) -> list[str]: ...
     def acquire_lock(self, serial: str, run_id: str) -> bool: ...
     def lock_holder(self, serial: str) -> str | None: ...
+    def lock_age(self, serial: str) -> float | None: ...
     def release_lock(self, serial: str, run_id: str) -> None: ...
     def generate_password(self, model: str) -> str: ...
     def admin_credential(self) -> tuple[str, str]: ...
@@ -100,7 +105,7 @@ class InMemoryVault:
 
     def __init__(self, admin: tuple[str, str] = ("admin", "admin"), fail_writes: int = 0):
         self.records: dict[str, tuple[int, dict]] = {}
-        self.locks: dict[str, str] = {}
+        self.locks: dict[str, tuple[str, float]] = {}
         self.admin = admin
         self.fail_writes = fail_writes
 
@@ -122,14 +127,17 @@ class InMemoryVault:
         return sorted(self.records)
 
     def acquire_lock(self, serial: str, run_id: str) -> bool:
-        holder = self.locks.setdefault(serial, run_id)
+        holder, _ = self.locks.setdefault(serial, (run_id, time.time()))
         return holder == run_id
 
     def lock_holder(self, serial: str) -> str | None:
-        return self.locks.get(serial)
+        return self.locks[serial][0] if serial in self.locks else None
+
+    def lock_age(self, serial: str) -> float | None:
+        return time.time() - self.locks[serial][1] if serial in self.locks else None
 
     def release_lock(self, serial: str, run_id: str) -> None:
-        if self.locks.get(serial) == run_id:
+        if self.lock_holder(serial) == run_id:
             del self.locks[serial]
 
     def generate_password(self, model: str) -> str:
@@ -192,7 +200,7 @@ class OpenBaoVault:
     def acquire_lock(self, serial: str, run_id: str) -> bool:
         try:
             # cas=0 means "create only if absent", which makes the lock atomic in the vault itself.
-            self._write(f"locks/{serial}", {"run_id": run_id}, cas=0)
+            self._write(f"locks/{serial}", {"run_id": run_id, "acquired_at": time.time()}, cas=0)
             return True
         except VaultConflict:
             return self.lock_holder(serial) == run_id
@@ -200,6 +208,10 @@ class OpenBaoVault:
     def lock_holder(self, serial: str) -> str | None:
         found = self._read(f"locks/{serial}")
         return found[1]["run_id"] if found else None
+
+    def lock_age(self, serial: str) -> float | None:
+        found = self._read(f"locks/{serial}")
+        return time.time() - float(found[1].get("acquired_at", 0)) if found else None
 
     def release_lock(self, serial: str, run_id: str) -> None:
         if self.lock_holder(serial) == run_id:

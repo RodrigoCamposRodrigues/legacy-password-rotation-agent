@@ -66,6 +66,7 @@ def test_stale_write_conflicts(vault):
 def test_lock_is_exclusive_and_reentrant(vault):
     serial = new_record().serial
     assert vault.acquire_lock(serial, "run-1")
+    assert 0 <= vault.lock_age(serial) < 5
     assert vault.acquire_lock(serial, "run-1")
     assert not vault.acquire_lock(serial, "run-2")
     vault.release_lock(serial, "run-2")
