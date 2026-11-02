@@ -1,10 +1,11 @@
+import json
 import re
 import uuid
 
 import httpx
 import pytest
 
-from rotator.config import Settings
+from rotator.config import REPO_ROOT, Settings
 from rotator.vault import DeviceRecord, InMemoryVault, OpenBaoVault, VaultConflict, VaultUnavailable
 
 
@@ -21,7 +22,21 @@ def openbao_vault():
 
 @pytest.fixture(params=["memory", pytest.param("openbao", marks=pytest.mark.openbao)])
 def vault(request):
-    return InMemoryVault() if request.param == "memory" else openbao_vault()
+    if request.param == "memory":
+        yield InMemoryVault()
+        return
+    vault = openbao_vault()
+    yield vault
+    delete_test_records(vault)
+
+
+def delete_test_records(vault):
+    """The rotator token can't delete device history, by design, so cleanup uses the root token."""
+    root = json.loads((REPO_ROOT / ".bao" / "state.json").read_text())["root_token"]
+    http = httpx.Client(base_url=str(vault.http.base_url), headers={"X-Vault-Token": root})
+    for serial in vault.list_devices():
+        if serial.startswith("TEST-"):
+            http.delete(f"secret/metadata/devices/{serial}").raise_for_status()
 
 
 def new_record(model="CoolTech CT-200"):

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Rotation runs</h1>
+<form method="post" action="/runs/sweep"><button>Run sweep now</button></form>
+<div class="wrap"><table>
+<tr><th>Run</th><th>Device</th><th>Trigger</th><th>Status</th><th>Outcome / reason</th><th>Updated</th></tr>
+{% for r in runs %}
+<tr><td><a href="/runs/{{ r.run_id }}"><code>{{ r.run_id }}</code></a></td><td>{{ r.serial }}</td><td>{{ r.trigger }}</td>
+<td class="{{ r.status }}">{{ r.status }}</td><td class="{{ r.outcome }}">{{ r.outcome or r.reason }}</td><td>{{ r.updated_at[:19] }}</td></tr>
+{% else %}
+<tr><td colspan="6">No runs yet.</td></tr>
+{% endfor %}
+</table></div>
+{% endblock %}

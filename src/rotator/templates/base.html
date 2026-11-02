@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rotation runs</title>
+<style>
+:root { --bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --line: #deded8; --ok: #1f7a4d; --warn: #a15c00; --bad: #b42318; --card: #fff; }
+@media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ececea; --muted: #a0a09a; --line: #34342f; --card: #1f1f1d; --ok: #4cc38a; --warn: #f0a640; --bad: #f97066; } }
+body { font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 16px; }
+main { max-width: 1000px; margin: 0 auto; }
+a { color: inherit; }
+table { width: 100%; border-collapse: collapse; background: var(--card); }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+.succeeded, .done { color: var(--ok); } .escalated, .crashed { color: var(--warn); } .aborted { color: var(--bad); }
+.card { background: var(--card); border: 1px solid var(--line); padding: 12px 16px; margin: 12px 0; border-radius: 6px; }
+button { font: inherit; padding: 4px 12px; margin-right: 6px; cursor: pointer; }
+code { font-size: 12px; }
+.shots img { max-width: 100%; border: 1px solid var(--line); margin: 6px 0; }
+.wrap { overflow-x: auto; }
+</style>
+</head>
+<body><main>
+{% block body %}{% endblock %}
+</main></body>
+</html>

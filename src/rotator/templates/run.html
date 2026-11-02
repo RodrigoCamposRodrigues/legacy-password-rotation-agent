@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block body %}
+<p><a href="/runs">&larr; All runs</a></p>
+<h1>Run <code>{{ run.run_id }}</code> &middot; {{ run.serial }}</h1>
+<p>Status: <b class="{{ run.status }}">{{ run.status }}</b>{% if run.outcome %} &middot; outcome <b class="{{ run.outcome }}">{{ run.outcome }}</b>{% endif %}</p>
+{% if view.waiting_for %}
+<div class="card">
+<b>{{ "Approval needed" if view.waiting_for.kind == "approval" else "Escalated to a human" }}</b>
+{% if view.waiting_for.reason %}<p>{{ view.waiting_for.reason }}</p>{% endif %}
+<form method="post" action="/runs/{{ run.run_id }}/resume">
+{% for option in view.waiting_for.options %}<button name="decision" value="{{ option }}">{{ option }}</button>{% endfor %}
+</form>
+<p style="color: var(--muted)">retry: start again from the vault state &middot; resolved: you fixed device and vault yourself &middot; abort: stop and release the lock</p>
+</div>
+{% elif run.status == "crashed" %}
+<div class="card"><b>The run crashed.</b> <p>{{ run.reason }}</p>
+<form method="post" action="/runs/{{ run.run_id }}/resume"><button>Resume from last checkpoint</button></form></div>
+{% endif %}
+<h2>Steps</h2>
+<div class="wrap"><table>
+<tr><th>Time</th><th>Step</th><th>Details</th></tr>
+{% for e in events %}
+<tr><td>{{ e.ts[11:19] }}</td><td>{{ e.step }}</td>
+<td><code>{% for k, v in e.items() if k not in ("ts", "step", "serial") %}{{ k }}={{ v }} {% endfor %}</code>
+{% if e.step == "screenshot" %}<div class="shots"><img src="/runs/{{ run.run_id }}/shots/{{ e.file }}" alt="{{ e.file }}"></div>{% endif %}</td></tr>
+{% endfor %}
+</table></div>
+{% endblock %}
