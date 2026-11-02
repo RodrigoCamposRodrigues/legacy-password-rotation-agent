@@ -4,16 +4,22 @@ The LLM sees a text snapshot with numbered elements and acts by number. It types
 puts the real secret in at the last moment and checks the form before any risky submit.
 """
 
+import functools
+import os
+import queue
 import re
+import threading
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Page
+from playwright.sync_api import Page, sync_playwright
 
 from rotator.audit import AuditLog
+from rotator.config import REPO_ROOT
 
 NEW = "{{NEW_PASSWORD}}"
 CURRENT = "{{CURRENT_PASSWORD}}"
@@ -58,6 +64,65 @@ SNAPSHOT_JS = """
   return out;
 }
 """
+
+
+def _browser_env() -> dict[str, str]:
+    """On WSL without libgbm, scripts unpack it under .tools/; point Chromium there if present."""
+    env = dict(os.environ)
+    local_libs = REPO_ROOT / ".tools" / "libroot" / "usr" / "lib" / "x86_64-linux-gnu"
+    if local_libs.exists() and "LD_LIBRARY_PATH" not in env:
+        env["LD_LIBRARY_PATH"] = str(local_libs)
+    return env
+
+
+class BrowserWorker:
+    """Owns Playwright on one thread. LangGraph runs tools on pool threads, and Playwright's sync API
+    only works on the thread that created the page, so every browser call is sent here."""
+
+    def __init__(self):
+        self._jobs: queue.Queue = queue.Queue()
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="browser")
+        self._thread.start()
+        self._ready.wait()
+
+    def _loop(self) -> None:
+        with sync_playwright() as playwright:
+            self.browser = playwright.chromium.launch(env=_browser_env())
+            self._ready.set()
+            while (job := self._jobs.get()) is not None:
+                fn, future = job
+                if not future.set_running_or_notify_cancel():
+                    continue
+                try:
+                    future.set_result(fn())
+                except BaseException as error:  # noqa: BLE001 - re-raised in the caller's thread
+                    future.set_exception(error)
+            self.browser.close()
+
+    def run(self, fn: Callable[[], Any]) -> Any:
+        if threading.current_thread() is self._thread:
+            return fn()
+        future: Future = Future()
+        self._jobs.put((fn, future))
+        return future.result()
+
+    def new_page(self) -> Page:
+        return self.run(lambda: self.browser.new_context().new_page())
+
+    def close_page(self, page: Page) -> None:
+        self.run(page.context.close)
+
+    def close(self) -> None:
+        self._jobs.put(None)
+        self._thread.join(timeout=10)
+
+
+def _on_browser_thread(method):
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        return self.run(lambda: method(self, *args, **kwargs))
+    return wrapper
 
 
 class AttemptAborted(Exception):
@@ -147,7 +212,8 @@ class Budget:
 class BrowserSession:
     def __init__(self, page: Page, dashboard_url: str, target_serial: str,
                  secrets: Callable[[], dict[str, str]], admin_credential: Callable[[], tuple[str, str]],
-                 budget: Budget, audit: AuditLog, max_gate_rejections: int = 2):
+                 budget: Budget, audit: AuditLog, max_gate_rejections: int = 2, worker: BrowserWorker | None = None):
+        self.worker = worker
         self.page = page
         self.dashboard_url = dashboard_url.rstrip("/")
         self.host = urlparse(self.dashboard_url).netloc
@@ -161,14 +227,20 @@ class BrowserSession:
         self.submits = 0
         self._password_form_passed = False
         self._elements: dict[int, Element] = {}
-        page.set_default_timeout(15_000)
+        self.run(lambda: page.set_default_timeout(15_000))
+
+    def run(self, fn: Callable[[], Any]) -> Any:
+        """Runs `fn` on the thread that owns the page."""
+        return self.worker.run(fn) if self.worker else fn()
 
     # Code-only actions: not exposed to the LLM.
 
+    @_on_browser_thread
     def login(self) -> None:
         self.page.goto(f"{self.dashboard_url}/login")
         self._submit_login()
 
+    @_on_browser_thread
     def snapshot(self) -> list[Element]:
         elements = [Element(**e) for e in self.page.evaluate(SNAPSHOT_JS)]
         self._elements = {e.id: e for e in elements}
@@ -211,6 +283,7 @@ class BrowserSession:
 
     # Tools exposed to the LLM. Each returns a short, secret-free message.
 
+    @_on_browser_thread
     def read_page(self) -> str:
         self.budget.spend()
         elements = self.snapshot()
@@ -228,6 +301,7 @@ class BrowserSession:
         ]
         return "\n".join(lines)
 
+    @_on_browser_thread
     def click(self, element_id: int) -> str:
         self.budget.spend()
         element = self._element(element_id)
@@ -243,6 +317,7 @@ class BrowserSession:
             return "Refused: navigation left the dashboard; went back."
         return f"Clicked. Now at {self._path()}. Call read_page to see it."
 
+    @_on_browser_thread
     def fill(self, element_id: int, value: str) -> str:
         self.budget.spend()
         element = self._element(element_id)
@@ -262,6 +337,7 @@ class BrowserSession:
         self.audit.event("fill", label=element.label, value=value)
         return f'Filled "{element.label}".'
 
+    @_on_browser_thread
     def select(self, element_id: int, option: str) -> str:
         self.budget.spend()
         element = self._element(element_id)
@@ -271,6 +347,7 @@ class BrowserSession:
         self.audit.event("select", label=element.label, option=option)
         return f'Selected "{option}".'
 
+    @_on_browser_thread
     def login_again(self) -> str:
         self.budget.spend()
         if "/login" not in self.page.url:
@@ -280,6 +357,7 @@ class BrowserSession:
         self.audit.event("login_again", path=self._path())
         return f"Logged in again. Now at {self._path()}. Call read_page to see it."
 
+    @_on_browser_thread
     def request_submit(self, element_id: int) -> str:
         self.budget.spend()
         element = self._element(element_id)

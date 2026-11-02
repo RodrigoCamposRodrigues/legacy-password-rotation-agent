@@ -1,4 +1,3 @@
-import os
 import socket
 import threading
 import time
@@ -14,14 +13,9 @@ from dashboard.db import connect
 from dashboard.faults import Faults
 from demo_seed import seed_all
 from rotator.audit import AuditLog
-from rotator.browser import Budget, BrowserSession
+from rotator.browser import Budget, BrowserSession, BrowserWorker, _browser_env
 from rotator.vault import InMemoryVault
 from simclock import FakeClock
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-LOCAL_LIBS = REPO_ROOT / ".tools" / "libroot" / "usr" / "lib" / "x86_64-linux-gnu"
-if LOCAL_LIBS.exists() and "LD_LIBRARY_PATH" not in os.environ:
-    os.environ["LD_LIBRARY_PATH"] = str(LOCAL_LIBS)
 
 ADMIN = ("admin", "admin-secret-pw")
 
@@ -83,7 +77,7 @@ def dashboard(_dashboard_server):
 def browser():
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        b = p.chromium.launch()
+        b = p.chromium.launch(env=_browser_env())
         yield b
         b.close()
 
@@ -95,16 +89,31 @@ def page(browser):
     context.close()
 
 
+@pytest.fixture(scope="session")
+def worker():
+    w = BrowserWorker()
+    yield w
+    w.close()
+
+
 @pytest.fixture
-def make_session(dashboard, page, tmp_path):
-    def factory(serial: str, new_password: str | None = None, **budget):
+def worker_page(worker):
+    page = worker.new_page()
+    yield page
+    worker.close_page(page)
+
+
+@pytest.fixture
+def make_session(dashboard, page, worker, worker_page, tmp_path):
+    """threaded=True puts the page on the browser worker, as the protocol and the LLM agent need."""
+    def factory(serial: str, new_password: str | None = None, threaded: bool = False, **budget):
         record = dashboard.vault.get_device(serial)
         new = new_password or dashboard.vault.generate_password(record.model)
         secrets = {"{{NEW_PASSWORD}}": new, "{{CURRENT_PASSWORD}}": record.active}
         session = BrowserSession(
-            page, dashboard.url, serial, lambda: secrets, dashboard.vault.admin_credential,
+            worker_page if threaded else page, dashboard.url, serial, lambda: secrets, dashboard.vault.admin_credential,
             Budget(budget.get("max_tool_calls", 40), 60_000, budget.get("max_seconds", 60)),
-            AuditLog(tmp_path / "audit"),
+            AuditLog(tmp_path / "audit"), worker=worker if threaded else None,
         )
         session.login()
         session.new_password = new
