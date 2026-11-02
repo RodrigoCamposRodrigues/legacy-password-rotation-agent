@@ -189,11 +189,22 @@ class Budget:
         self.tool_calls = 0
         self.started = time.monotonic()
 
-    @property
-    def tokens(self) -> int:
+    def _usage_sum(self, key: str) -> int:
         if not self.usage:
             return 0
-        return sum(u.get("total_tokens", 0) for u in self.usage.usage_metadata.values())
+        return sum(u.get(key, 0) for u in self.usage.usage_metadata.values())
+
+    @property
+    def tokens(self) -> int:
+        return self._usage_sum("total_tokens")
+
+    @property
+    def input_tokens(self) -> int:
+        return self._usage_sum("input_tokens")
+
+    @property
+    def output_tokens(self) -> int:
+        return self._usage_sum("output_tokens")
 
     @property
     def seconds(self) -> float:

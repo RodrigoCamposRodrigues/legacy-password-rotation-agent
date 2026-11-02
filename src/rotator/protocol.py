@@ -172,19 +172,21 @@ def build_graph(deps: Deps, checkpointer):
         attempts = state.get("change_attempts", 0) + 1
         target = Target(serial=record.serial, name=record.name, model=record.model, run_id=state["run_id"])
         audit = deps.audit(state["run_id"])
-        report, error = {}, ""
+        report, error, session = {}, "", None
         try:
             with deps.session(target, audit) as session:
                 report = deps.changer.change(session, target).model_dump()
-                log(state, "change", attempt=attempts, tool_calls=session.budget.tool_calls,
-                    tokens=session.budget.tokens, seconds=round(session.budget.seconds, 1),
-                    gate_rejections=session.gate_rejections, report=report)
         except AttemptAborted as aborted:
             error = aborted.reason
         except Exception as failure:  # noqa: BLE001 - any agent failure goes to verify, which decides
             error = f"{type(failure).__name__}: {str(failure)[:200]}"
-        if error:
-            log(state, "change_failed", attempt=attempts, error=error)
+        metrics = {}
+        if session:
+            budget = session.budget
+            metrics = dict(tool_calls=budget.tool_calls, tokens=budget.tokens, input_tokens=budget.input_tokens,
+                           output_tokens=budget.output_tokens, seconds=round(budget.seconds, 1),
+                           gate_rejections=session.gate_rejections)
+        log(state, "change_failed" if error else "change", attempt=attempts, error=error, report=report, **metrics)
         crash.point("mid_change")
         return Command(update={"change_attempts": attempts, "change_error": error, "report": report}, goto="verify")
 

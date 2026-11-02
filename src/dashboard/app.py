@@ -49,13 +49,16 @@ def create_app(db_path: Path, clock: Clock | None = None, webhook_url: str | Non
                 return False
             limit = app.state.faults.session_expiry_requests
             if limit and row["requests"] >= limit:
+                # One expiry per fault setting, like a real timeout in the middle of a task.
+                app.state.faults.session_expiry_requests = 0
                 conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
                 return False
             conn.execute("UPDATE sessions SET requests = requests + 1 WHERE token = ?", (token,))
         return True
 
     def to_login(request: Request) -> RedirectResponse:
-        return RedirectResponse(f"/login?expired=1&next={request.url.path}", status_code=303)
+        next_path = request.url.path if request.method == "GET" else "/devices"
+        return RedirectResponse(f"/login?expired=1&next={next_path}", status_code=303)
 
     def load_device(device_id: int):
         with connect(db_path) as conn:
