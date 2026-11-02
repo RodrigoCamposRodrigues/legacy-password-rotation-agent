@@ -46,7 +46,7 @@ This is a reconstruction of a system design question from an AI engineering inte
 - `secret/locks/{serial}`: `run_id`, `acquired_at`. Created with check-and-set `cas=0`, so only one run can hold it.
 - Writes to device records use check-and-set on the current version, so two writers can't silently overwrite each other.
 - Password policies `ct200` and `fl9` generate passwords. The agent's token has a narrow policy; the root token is only used by the init script.
-- Not `-dev` mode: file storage plus `scripts/bao_init.py` for init and unseal. Unseal key and tokens live in ignored `.bao/`.
+- Not `-dev` mode: integrated Raft storage on disk plus `scripts/bao_init.py` for init and unseal. Unseal key and tokens live in ignored `.bao/`.
 
 ## Rotation protocol
 

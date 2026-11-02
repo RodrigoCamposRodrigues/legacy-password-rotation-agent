@@ -1,0 +1,13 @@
+services:
+  openbao:
+    image: openbao/openbao:2.7.2
+    entrypoint: ["bao", "server", "-config=/openbao/config/config.hcl"]
+    ports:
+      - "127.0.0.1:8200:8200"
+    volumes:
+      - ./openbao/config.hcl:/openbao/config/config.hcl:ro
+      - bao-data:/openbao/file
+    restart: unless-stopped
+
+volumes:
+  bao-data:
