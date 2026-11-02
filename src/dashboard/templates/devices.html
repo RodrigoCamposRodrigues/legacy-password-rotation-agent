@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Refrigeration devices</h2>
+<form method="get" action="/devices">
+<label for="q">Find device by name</label> <input id="q" name="q" type="text" value="{{ q }}"> <input type="submit" value="Search">
+</form>
+<p>{{ total }} device(s). Page {{ page }} of {{ pages }}.</p>
+<table class="grid">
+<tr><th>Name</th><th>Model</th><th>Location</th><th>Notes</th></tr>
+{% for d in devices %}
+<tr><td><a href="/devices/{{ d.id }}">{{ d.name }}</a></td><td>{{ d.model }}</td><td>{{ d.location }}</td><td class="note">{{ d.notes }}</td></tr>
+{% endfor %}
+</table>
+<p>
+{% if page > 1 %}<a href="/devices?page={{ page - 1 }}&q={{ q }}">&laquo; Previous</a>{% endif %}
+{% if page < pages %}<a href="/devices?page={{ page + 1 }}&q={{ q }}">Next &raquo;</a>{% endif %}
+</p>
+{% endblock %}

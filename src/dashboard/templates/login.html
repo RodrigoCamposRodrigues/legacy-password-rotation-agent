@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Administrator login</h2>
+{% if expired %}<p class="err">Your session has expired. Please log in again.</p>{% endif %}
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<form method="post" action="/login">
+<input type="hidden" name="next" value="{{ next }}">
+<table>
+<tr><td><label for="username">User name</label></td><td><input id="username" name="username" type="text"></td></tr>
+<tr><td><label for="password">Password</label></td><td><input id="password" name="password" type="password"></td></tr>
+</table>
+<input type="submit" value="Log in">
+</form>
+{% endblock %}

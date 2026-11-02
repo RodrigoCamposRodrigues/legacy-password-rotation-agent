@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ColdChain Manager v3.2{% if title %} - {{ title }}{% endif %}</title>
+<style>
+body { font-family: Verdana, Arial, sans-serif; font-size: 12px; background: #d4d0c8; margin: 0; }
+#top { background: #003366; color: #fff; padding: 6px 10px; }
+#top a { color: #ffcc00; }
+#main { background: #fff; margin: 10px; padding: 10px; border: 1px solid #808080; }
+table.grid { border-collapse: collapse; width: 100%; }
+table.grid td, table.grid th { border: 1px solid #a0a0a0; padding: 3px 6px; }
+table.grid th { background: #e0e0e0; text-align: left; }
+.err { color: #c00; font-weight: bold; }
+.ok { color: #060; font-weight: bold; }
+.tabs a { display: inline-block; padding: 3px 10px; border: 1px solid #808080; background: #e0e0e0; }
+.tabs a.active { background: #fff; font-weight: bold; }
+.note { color: #555; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="top"><b>ColdChain Manager v3.2</b> &nbsp; (c) 2009 FrostSoft Ltd. &nbsp; <a href="/devices">Devices</a> | <a href="/logout">Log out</a></div>
+<div id="main">
+{% block body %}{% endblock %}
+</div>
+</body>
+</html>

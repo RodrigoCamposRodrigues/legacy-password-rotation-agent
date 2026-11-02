@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>{{ d.name }}</h2>
+<div class="tabs">
+<a href="/devices/{{ d.id }}?tab=overview" class="{{ 'active' if tab == 'overview' }}">Overview</a>
+<a href="/devices/{{ d.id }}?tab=network" class="{{ 'active' if tab == 'network' }}">Network</a>
+<a href="/devices/{{ d.id }}?tab=security" class="{{ 'active' if tab == 'security' }}">Security</a>
+</div>
+<div>S/N {{ d.serial }} &middot; {{ d.model }} &middot; {{ d.location }}</div>
+{% if tab == 'network' %}
+<table class="grid"><tr><th>IP</th><td>10.20.4.{{ d.id }}</td></tr><tr><th>Gateway</th><td>10.20.4.1</td></tr></table>
+{% elif tab == 'security' %}
+<h3>Service PIN</h3>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<form method="post" action="/devices/{{ d.id }}/pin" onsubmit="return confirm('Apply the new service PIN to {{ d.name }}?');">
+<p><label for="service_pin">Service PIN</label> <input id="service_pin" name="service_pin" type="password" maxlength="8"></p>
+<p><label for="repeat_pin">Repeat PIN</label> <input id="repeat_pin" name="repeat_pin" type="password" maxlength="8"></p>
+<button type="submit">Apply</button>
+</form>
+<p class="note">8 digits.</p>
+{% else %}
+<p>Compressor: OK &nbsp; Defrost cycle: 6h &nbsp; Temperature: -19.2 &deg;C</p>
+{% if d.notes %}<p class="note">Notes: {{ d.notes }}</p>{% endif %}
+{% endif %}
+{% endblock %}

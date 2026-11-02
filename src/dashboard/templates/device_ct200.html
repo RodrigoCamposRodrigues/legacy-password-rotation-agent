@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>{{ d.name }}</h1>
+<p>Serial number: <b>{{ d.serial }}</b> &nbsp; Model: {{ d.model }} &nbsp; Location: {{ d.location }}</p>
+<p>Status: ONLINE &nbsp; Temperature: 3.4 &deg;C &nbsp; Set point: 4.0 &deg;C</p>
+{% if d.notes %}<p class="note">Notes: {{ d.notes }}</p>{% endif %}
+<h3>Change admin password</h3>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<form method="post" action="/devices/{{ d.id }}/password">
+<table>
+<tr><td><label for="current_password">Current password</label></td><td><input id="current_password" name="current_password" type="password"></td></tr>
+<tr><td><label for="new_password">New password</label></td><td><input id="new_password" name="new_password" type="password"></td></tr>
+<tr><td><label for="confirm_password">Confirm new password</label></td><td><input id="confirm_password" name="confirm_password" type="password"></td></tr>
+</table>
+<input type="submit" value="Save">
+</form>
+<p class="note">16 characters. Letters, digits and !@#% only.</p>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Are you sure?</h2>
+<p>You are about to change the admin password of <b>{{ d.name }}</b> (serial {{ d.serial }}).</p>
+<form method="post" action="/devices/{{ d.id }}/password/confirm">
+<input type="hidden" name="token" value="{{ token }}">
+<input type="submit" value="Yes, change password">
+</form>
+<p><a href="/devices/{{ d.id }}">Cancel</a></p>
+{% endblock %}
