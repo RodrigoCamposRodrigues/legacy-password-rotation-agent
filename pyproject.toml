@@ -1,0 +1,37 @@
+[project]
+name = "legacy-password-rotation-agent"
+version = "0.1.0"
+description = "LLM browser agent that rotates device passwords through a legacy web dashboard without ever losing one."
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.162",
+  "uvicorn>=0.54",
+  "jinja2>=3.1",
+  "python-multipart",
+  "httpx>=0.28",
+  "pydantic>=2.14",
+  "python-dotenv",
+  "playwright==1.64.1",
+  "langchain==1.4.7",
+  "langchain-openai==1.7.3",
+  "langgraph>=1.2.19",
+  "langgraph-checkpoint-sqlite==3.1.3",
+  "langsmith>=0.14",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["openbao: needs a running OpenBao server", "slow: real browser end-to-end"]
