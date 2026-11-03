@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=9"]
+demo = ["pillow>=11"]
 
 [build-system]
 requires = ["setuptools>=68"]
