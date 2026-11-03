@@ -27,6 +27,8 @@ class Settings:
     bao_addr: str = "http://127.0.0.1:8200"
     bao_token: str = ""
     model: str = "gpt-6-luna"
+    # None leaves the provider's default effort for the model.
+    reasoning_effort: str | None = None
     data_dir: Path = REPO_ROOT / "data"
     supervised: bool = False
     clock_offset_days: float = 0
@@ -46,6 +48,7 @@ class Settings:
             bao_addr=os.environ.get("BAO_ADDR", cls.bao_addr),
             bao_token=_bao_token(),
             model=os.environ.get("ROTATOR_MODEL", cls.model),
+            reasoning_effort=os.environ.get("ROTATOR_REASONING_EFFORT") or None,
             data_dir=Path(os.environ.get("ROTATOR_DATA_DIR", REPO_ROOT / "data")),
             supervised=_flag("SUPERVISED"),
             clock_offset_days=float(os.environ.get("CLOCK_OFFSET_DAYS", "0")),

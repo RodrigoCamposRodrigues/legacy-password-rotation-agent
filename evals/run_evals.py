@@ -164,14 +164,16 @@ def main() -> None:
     load_dotenv(ROOT / ".env")
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=os.environ.get("ROTATOR_MODEL", "gpt-6-luna"))
+    parser.add_argument("--effort", default=os.environ.get("ROTATOR_REASONING_EFFORT") or None,
+                        help="reasoning effort, e.g. low or medium; unset uses the model's default")
     parser.add_argument("--changer", choices=["llm", "scripted"], default="llm")
     parser.add_argument("--reps", type=int, default=5)
     parser.add_argument("--scenarios", nargs="*", default=[s.name for s in SCENARIOS])
     parser.add_argument("--no-langsmith", action="store_true")
     args = parser.parse_args()
 
-    changer = ScriptedChanger() if args.changer == "scripted" else LLMChanger(args.model)
-    label = "scripted" if args.changer == "scripted" else args.model
+    changer = ScriptedChanger() if args.changer == "scripted" else LLMChanger(args.model, reasoning_effort=args.effort)
+    label = "scripted" if args.changer == "scripted" else args.model + (f"-{args.effort}" if args.effort else "")
     use_langsmith = bool(os.environ.get("LANGSMITH_API_KEY")) and not args.no_langsmith
     with tempfile.TemporaryDirectory() as tmp:
         harness = Harness(changer, Path(tmp))

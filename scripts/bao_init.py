@@ -34,7 +34,11 @@ def main() -> None:
     http = httpx.Client(base_url=addr, timeout=10)
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
 
-    status = http.get("sys/seal-status").json()
+    try:
+        status = http.get("sys/seal-status").json()
+    except httpx.ConnectError:
+        raise SystemExit(f"OpenBao is not running at {addr}. Start it first, in its own terminal: "
+                         "./scripts/bao_server.sh (or docker compose up -d)") from None
     if not status["initialized"]:
         init = http.put("sys/init", json={"secret_shares": 1, "secret_threshold": 1}).raise_for_status().json()
         state = {"unseal_key": (init.get("keys_base64") or init["keys"])[0], "root_token": init["root_token"]}

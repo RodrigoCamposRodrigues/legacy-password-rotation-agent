@@ -79,7 +79,8 @@ class BrowserWorker:
     """Owns Playwright on one thread. LangGraph runs tools on pool threads, and Playwright's sync API
     only works on the thread that created the page, so every browser call is sent here."""
 
-    def __init__(self):
+    def __init__(self, headed: bool = False, slow_mo_ms: float = 0):
+        self._launch = {"headless": not headed, "slow_mo": slow_mo_ms}
         self._jobs: queue.Queue = queue.Queue()
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="browser")
@@ -88,7 +89,7 @@ class BrowserWorker:
 
     def _loop(self) -> None:
         with sync_playwright() as playwright:
-            self.browser = playwright.chromium.launch(env=_browser_env())
+            self.browser = playwright.chromium.launch(env=_browser_env(), **self._launch)
             self._ready.set()
             while (job := self._jobs.get()) is not None:
                 fn, future = job

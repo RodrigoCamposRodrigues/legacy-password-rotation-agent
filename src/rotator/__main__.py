@@ -20,12 +20,14 @@ if __name__ == "__main__":
     if not settings.bao_token:
         raise SystemExit("No OpenBao token. Start OpenBao and run scripts/bao_init.py first.")
     # ROTATOR_CHANGER=scripted runs the whole system without an LLM, e.g. before an API key is set.
-    changer = ScriptedChanger() if os.environ.get("ROTATOR_CHANGER") == "scripted" else LLMChanger(settings.model)
+    changer = ScriptedChanger() if os.environ.get("ROTATOR_CHANGER") == "scripted" else LLMChanger(settings.model, reasoning_effort=settings.reasoning_effort)
     deps = Deps(
         vault=OpenBaoVault(settings.bao_addr, settings.bao_token),
         probe=DeviceProbe(settings.dashboard_url),
         changer=changer,
-        worker=BrowserWorker(),
+        # ROTATOR_HEADED=true shows the browser window, slowed down so you can follow each action.
+        worker=BrowserWorker(headed=os.environ.get("ROTATOR_HEADED") == "true",
+                             slow_mo_ms=float(os.environ.get("ROTATOR_SLOW_MO_MS", "400"))),
         settings=settings,
         clock=SystemClock(settings.clock_offset_days),
     )

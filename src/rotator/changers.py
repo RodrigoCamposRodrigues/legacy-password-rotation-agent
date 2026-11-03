@@ -134,12 +134,14 @@ def build_tools(session: BrowserSession) -> list:
 
 
 class LLMChanger:
-    def __init__(self, model_name: str, model=None):
+    def __init__(self, model_name: str, model=None, reasoning_effort: str | None = None):
         self.model_name = model_name
         self._model = model
+        self.reasoning_effort = reasoning_effort
 
     def change(self, session: BrowserSession, target: Target) -> AgentReport:
-        model = self._model or init_chat_model(self.model_name, model_provider="openai")
+        extra = {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
+        model = self._model or init_chat_model(self.model_name, model_provider="openai", **extra)
         agent = create_agent(model, build_tools(session), system_prompt=SYSTEM_PROMPT,
                              response_format=AgentReport, name="password_changer")
         usage = UsageMetadataCallbackHandler()
