@@ -19,6 +19,7 @@
   <img alt="Evals" src="https://img.shields.io/badge/agent%20evals-45%2F45-2EA44F">
   <img alt="Lost passwords" src="https://img.shields.io/badge/lost%20passwords-0-2EA44F">
   <img alt="Secret leaks" src="https://img.shields.io/badge/secret%20leaks-0-2EA44F">
+  <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
 <p align="center">
