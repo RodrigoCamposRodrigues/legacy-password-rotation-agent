@@ -2,6 +2,7 @@ import pytest
 
 from rotator.audit import AuditLog
 from rotator.browser import Budget, BrowserSession, BrowserWorker, _browser_env
+from rotator.config import Defences
 from testbed import start_dashboard
 
 
@@ -51,7 +52,8 @@ def worker_page(worker):
 @pytest.fixture
 def make_session(dashboard, page, worker, worker_page, tmp_path):
     """threaded=True puts the page on the browser worker, as the protocol and the LLM agent need."""
-    def factory(serial: str, new_password: str | None = None, threaded: bool = False, **budget):
+    def factory(serial: str, new_password: str | None = None, threaded: bool = False,
+                defences: Defences = Defences(), **budget):
         record = dashboard.vault.get_device(serial)
         new = new_password or dashboard.vault.generate_password(record.model)
         secrets = {"{{NEW_PASSWORD}}": new, "{{CURRENT_PASSWORD}}": record.active}
@@ -59,7 +61,7 @@ def make_session(dashboard, page, worker, worker_page, tmp_path):
             worker_page if threaded else page, dashboard.url, serial, lambda: secrets, dashboard.vault.admin_credential,
             Budget(budget.get("max_tool_calls", 40), 60_000, budget.get("max_seconds", 60)),
             AuditLog(tmp_path / "audit"), worker=worker if threaded else None,
-            known_serials=dashboard.vault.list_devices(),
+            known_serials=dashboard.vault.list_devices(), defences=defences,
         )
         session.login()
         session.new_password = new

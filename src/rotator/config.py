@@ -1,7 +1,8 @@
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
+from typing import Iterable
 
 from dotenv import load_dotenv
 
@@ -19,6 +20,26 @@ def _bao_token() -> str:
     if state.exists():
         return json.loads(state.read_text())["rotator_token"]
     return ""
+
+
+@dataclass(frozen=True)
+class Defences:
+    """Switches for security ablation (agent-security-harness). Off means weaker; production keeps all on."""
+
+    placeholders: bool = True
+    submit_gate: bool = True
+    untrusted_marking: bool = True
+    budgets: bool = True
+    verify: bool = True
+
+    def with_disabled(self, names: Iterable[str]) -> "Defences":
+        names = set(names)
+        if unknown := names - set(DEFENCE_NAMES):
+            raise ValueError(f"unknown defence(s): {', '.join(sorted(unknown))}")
+        return replace(self, **{name: False for name in names})
+
+
+DEFENCE_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Defences))
 
 
 @dataclass
@@ -39,6 +60,7 @@ class Settings:
     rotation_days: int = 180
     # A lock whose run this service doesn't know is only taken over after this long (longest run is ~10 min).
     lock_ttl_seconds: float = 3600
+    defences: Defences = field(default_factory=Defences)
 
     @classmethod
     def from_env(cls) -> "Settings":

@@ -83,12 +83,17 @@ class Deps:
             return {NEW: record.pending, CURRENT: record.active}
 
         settings = self.settings
+        if settings.defences.budgets:
+            budget = Budget(settings.max_tool_calls, settings.max_tokens, settings.max_seconds)
+        else:
+            # Ablation still needs a bound, or one hijacked run could burn the whole eval budget.
+            budget = Budget(100, 150_000, 300)
         page = self.worker.new_page()
         try:
             session = BrowserSession(
                 page, settings.dashboard_url, target.serial, secrets, self.vault.admin_credential,
-                Budget(settings.max_tool_calls, settings.max_tokens, settings.max_seconds), audit, worker=self.worker,
-                known_serials=self.vault.list_devices(),
+                budget, audit, worker=self.worker, known_serials=self.vault.list_devices(),
+                defences=settings.defences,
             )
             session.login()
             yield session
