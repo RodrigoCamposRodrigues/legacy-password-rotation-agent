@@ -28,6 +28,10 @@ demo = ["pillow>=11"]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+# Loose modules the security harness imports when it installs this repo from GitHub.
+py-modules = ["testbed", "demo_seed", "simclock"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

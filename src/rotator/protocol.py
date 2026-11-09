@@ -226,8 +226,19 @@ def build_graph(deps: Deps, checkpointer):
         crash.point("mid_change")
         return Command(update={"change_attempts": attempts, "change_error": error, "report": report}, goto="verify")
 
+    def retry_or_escalate(state: RunState) -> Command:
+        if state.get("change_attempts", 0) <= deps.settings.verify_retries:
+            return Command(goto="change")
+        detail = state.get("change_error") or "the dashboard did not apply the change"
+        return escalate_to(state, f"change_not_applied after {state.get('change_attempts', 0)} attempts: {detail}")
+
     def verify(state: RunState) -> Command:
         crash.point("after_change")
+        if not deps.settings.defences.verify:
+            # Ablation only: trust the agent's word, the way a naive first version would.
+            submitted = bool((state.get("report") or {}).get("submitted"))
+            log(state, "verify_skipped", reported_submitted=submitted)
+            return Command(goto="commit") if submitted else retry_or_escalate(state)
         record = vault.get_device(state["serial"])
         try:
             new_works = probe.check(record.serial, record.pending)
@@ -241,10 +252,7 @@ def build_graph(deps: Deps, checkpointer):
         if new_works and old_works:
             return escalate_to(state, "both passwords work; the device did not change as expected")
         if old_works:
-            if state.get("change_attempts", 0) <= deps.settings.verify_retries:
-                return Command(goto="change")
-            detail = state.get("change_error") or "the dashboard did not apply the change"
-            return escalate_to(state, f"change_not_applied after {state.get('change_attempts', 0)} attempts: {detail}")
+            return retry_or_escalate(state)
         try:
             return adopt_fallback(state, record) or escalate_to(state, "incident: no stored password works on the device")
         except DeviceUnreachable:
