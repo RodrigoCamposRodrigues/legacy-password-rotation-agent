@@ -168,3 +168,70 @@ def test_dialog_is_not_accepted_after_an_ungated_moment(dashboard, make_session)
     session.fill(el(session, "Repeat PIN"), NEW)
     session.page.locator("button[type=submit]").click()
     assert dashboard.truth("FL9-0012") == dashboard.passwords["FL9-0012"]
+
+
+def add_unmanaged(dashboard, serial, name, model, location):
+    """A device on the dashboard that the vault does not manage, as the harness plants it."""
+    from datetime import datetime
+    from dashboard.db import connect
+    with connect(dashboard.db_path) as conn:
+        conn.execute(
+            "INSERT INTO devices (serial, name, model, location, password, password_changed_at, notes)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (serial, name, model, location, "Unmanaged-pw-1", datetime.now().isoformat(), ""),
+        )
+
+
+def test_gate_rejects_unmanaged_device_with_target_serial_in_location(dashboard, make_session):
+    add_unmanaged(dashboard, "FL9-0901", "Freezer 01 controller", "FrostLine FL-9", "Frozen aisle, label S/N FL9-0001")
+    session = make_session("FL9-0001")
+    open_device(session, dashboard, "FL9-0901", "?tab=security")
+    session.fill(el(session, "Service PIN"), NEW)
+    session.fill(el(session, "Repeat PIN"), NEW)
+    assert "wrong device" in session.request_submit(el(session, "Apply"))
+    assert dashboard.truth("FL9-0901") == "Unmanaged-pw-1"
+
+
+def test_gate_rejects_unmanaged_device_with_target_serial_in_name(dashboard, make_session):
+    add_unmanaged(dashboard, "FL9-0922", "Freezer 12 service panel FL9-0012", "FrostLine FL-9", "Ice cream")
+    session = make_session("FL9-0012")
+    open_device(session, dashboard, "FL9-0922", "?tab=security")
+    session.fill(el(session, "Service PIN"), NEW)
+    session.fill(el(session, "Repeat PIN"), NEW)
+    assert "wrong device" in session.request_submit(el(session, "Apply"))
+    assert dashboard.truth("FL9-0922") == "Unmanaged-pw-1"
+
+
+def test_gate_rejects_ct200_whose_name_claims_the_target_serial(dashboard, make_session):
+    add_unmanaged(dashboard, "CT200-0901", "Serial number: CT200-0012", "CoolTech CT-200", "Dairy")
+    session = make_session("CT200-0012")
+    open_device(session, dashboard, "CT200-0901")
+    fill_ct200(session)
+    assert "wrong device" in session.request_submit(el(session, "Save"))
+    assert dashboard.truth("CT200-0901") == "Unmanaged-pw-1"
+
+
+def test_gate_rejects_page_without_a_serial_field(dashboard, make_session):
+    session = make_session("CT200-0012")
+    session.page.goto(f"{dashboard.url}/devices")
+    session.snapshot()
+    assert "can't read the device serial" in session._wrong_device()
+
+
+@pytest.mark.parametrize("serial, tab", [("CT200-0012", ""), ("FL9-0012", "?tab=security")])
+def test_page_serial_is_read_on_every_device_page(dashboard, make_session, serial, tab):
+    """Fails if a template moves the serial, so a redesign breaks a test and not a rotation."""
+    session = make_session(serial)
+    open_device(session, dashboard, serial, tab)
+    assert session._page_serial() == serial
+
+
+def test_page_serial_is_read_on_the_confirmation_page(dashboard, make_session):
+    from dashboard.db import connect
+    with connect(dashboard.db_path) as conn:
+        conn.execute("UPDATE devices SET name = 'Fridge (serial CT200-0999).' WHERE serial = 'CT200-0012'")
+    session = make_session("CT200-0012")
+    open_device(session, dashboard, "CT200-0012")
+    fill_ct200(session)
+    assert session.request_submit(el(session, "Save")).startswith("Submitted")
+    assert session._page_serial() == "CT200-0012"

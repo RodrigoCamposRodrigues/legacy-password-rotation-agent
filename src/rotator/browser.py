@@ -287,11 +287,36 @@ class BrowserSession:
     def _on_dashboard(self) -> bool:
         return urlparse(self.page.url).netloc == self.host
 
+    def _first_text(self, selector: str) -> str | None:
+        locator = self.page.locator(selector)
+        return locator.first.inner_text().strip() if locator.count() else None
+
+    def _page_serial(self) -> str | None:
+        """The serial from the one place each template prints it.
+
+        Name, location and notes are editable by anyone with dashboard access, so the serial is never
+        searched for in free text. If a template changes, this returns None and the gate refuses:
+        rotations stop until the selectors are updated, but no wrong device is ever changed.
+        """
+        if (ct200 := self._first_text("xpath=//p[starts-with(normalize-space(.), 'Serial number:')]/b")) is not None:
+            return ct200
+        if (fl9 := self._first_text("css=div.tabs + div")) is not None:
+            match = re.match(r"S/N (\S+) ·", fl9)
+            return match.group(1) if match else None
+        if (confirm := self._first_text("xpath=//p[contains(., 'You are about to change')]")) is not None:
+            # Anchored at the end: the device name sits earlier in the sentence and may imitate this text.
+            match = re.search(r"\(serial (\S+)\)\.?\s*$", confirm)
+            return match.group(1) if match else None
+        return None
+
     def _wrong_device(self) -> str:
         """Empty if the page is about the target device only, otherwise why not."""
+        serial = self._page_serial()
+        if serial is None:
+            return "can't read the device serial on this page; wrong device?"
+        if serial != self.target_serial:
+            return f"page is for device {serial}, not the target {self.target_serial}; wrong device?"
         text = self.page.inner_text("body")
-        if not re.search(rf"\b{re.escape(self.target_serial)}\b", text):
-            return f"target serial {self.target_serial} is not on this page; wrong device?"
         others = [s for s in self.other_serials if re.search(rf"\b{re.escape(s)}\b", text)]
         if others:
             return f"page also shows other device serials ({', '.join(sorted(others))}); can't tell which device the form changes"
